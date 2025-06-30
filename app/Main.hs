@@ -72,13 +72,26 @@ orderTaker fromQ toQ statusMap = forever $ do
   return ()
 
 cook :: Int -> TQueue Order -> TQueue Order -> OSMap -> IO ()
-cook key fromQ toQ statusMap = cookLoop
+cook key fromQ toQ statusMap = cookLoop 2
   where
-    cookLoop :: IO ()
-    cookLoop = do
+    cookLoop :: Int -> IO ()
+    cookLoop 0 = 
+      putStrLn $ " Cook made too many mistakes, leaving early with no pay"
+    cookLoop n = do
       order <- atomically $ readTQueue fromQ
       putStrLn $ " Cook " ++ show key ++ ", preparing burger for order " ++ show (orderId order)
       threadDelay =<< randomRIO (1_000_000, 2_000_000)
+      mistake <- randomRIO(1, 99 :: Int)
+      if mistake <= 10 
+        then do
+          putStrLn $ "  Cook " ++ show key ++ ", made a mistake on order " ++ show (orderId order)
+          atomically $ writeTQueue fromQ order -- put order back on original queue
+          cookLoop $ n - 1
+        else
+          cookUpdate n order toQ statusMap
+
+    cookUpdate :: Int -> Order -> TQueue Order -> OSMap -> IO () 
+    cookUpdate n order toQ statusMap = do
       atomically $ do
         updateStatus
           (orderId order)
@@ -93,7 +106,7 @@ cook key fromQ toQ statusMap = cookLoop
       putStrLn $ "  Burger cooked for order " ++ show (orderId order) ++ " and ready to eat, assistant preparing drinks "
       _ <- forkIO $ prepareDrink order statusMap
 
-      cookLoop 
+      cookLoop n 
 
 waitress :: Int -> TQueue Order -> TQueue Order -> OSMap -> IO ()
 waitress wid fromQ toQ statusMap = forever $ do
