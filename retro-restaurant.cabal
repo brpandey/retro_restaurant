@@ -61,7 +61,7 @@ executable retro-restaurant
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    -- other-modules:
+    other-modules:    Metrics
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -72,7 +72,8 @@ executable retro-restaurant
         containers >= 0.5,
         time >= 1.10,
         random >= 1.3,
-        stm >= 2.5
+        stm >= 2.5,
+        unordered-containers >= 0.2.20
 
     -- Directories containing source files.
     hs-source-dirs:   app
