@@ -61,7 +61,9 @@ executable retro-restaurant
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    other-modules:    Metrics
+    other-modules:    
+        Metrics,
+        Kitchen
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
