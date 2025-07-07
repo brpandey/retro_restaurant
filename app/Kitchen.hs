@@ -10,18 +10,20 @@ import Control.Concurrent.STM
 import Control.Monad
 import qualified Data.Map.Strict as HM
 import Data.Time
+import Menu
 import qualified Metrics as M
 import System.Random
 
-data BurgerType = Mushroom | Steak | BlackBean | Fish
+data BurgerType = Mushroom | Chicken | Fish
   deriving (Show, Enum, Bounded, Eq)
 
 randomBurger :: IO BurgerType
-randomBurger = toEnum <$> randomRIO (0, 3)
+randomBurger = toEnum <$> randomRIO (0, 2)
 
 data Order = Order
   { createdAt :: UTCTime,
     orderId :: Int,
+    --    menuChoice :: MenuChoice,
     burgerType :: BurgerType,
     standardCondiments :: Bool,
     guacamole :: Bool
