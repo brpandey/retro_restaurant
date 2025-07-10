@@ -65,6 +65,7 @@ executable retro-restaurant
         Metrics,
         Kitchen,
         KitchenQueue,
+        KitchenTypes,
         Menu
 
     -- LANGUAGE extensions used by modules in this package.

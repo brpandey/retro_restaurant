@@ -10,7 +10,8 @@ import Control.Concurrent.STM
 import Control.Monad
 import qualified Data.Map.Strict as HM
 import Data.Time
-import Menu
+import KitchenTypes ()
+import Menu ()
 import qualified Metrics as M
 import System.Random
 
