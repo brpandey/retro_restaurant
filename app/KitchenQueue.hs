@@ -1,7 +1,10 @@
 module KitchenQueue
-  ( newKQ,
+  ( KQueue (..),
+    newKQ,
     enqueue,
     dequeue,
+    markComplete,
+    getOrder,
   )
 where
 
@@ -18,7 +21,8 @@ import KitchenTypes
 data KQueue = KQueue
   { queueMap :: TVar (HM.Map JobTier (MinHeap CookJob)), -- map of tiered priority queues
     size :: Int, -- max size of any one particular priority queue
-    finishedJobs :: TVar (HS.HashSet Int) -- finished Job Ids
+    finishedJobs :: TVar (HS.HashSet Int), -- finished Job Ids
+    orderMap :: TVar (HM.Map Int Order)
   }
 
 newKQ :: Int -> STM KQueue
@@ -28,11 +32,20 @@ newKQ sz = do
     let heap = H.empty
     modifyTVar' hm $ HM.insert tier heap
   finished <- newTVar HS.empty
-  return $ KQueue hm sz finished
+  hm2 <- newTVar HM.empty
 
-enqueue :: CookJob -> KQueue -> STM ()
-enqueue job (KQueue qMap sz _) = do
+  return $ KQueue hm sz finished hm2
+
+enqueue :: CookJob -> Order -> KQueue -> STM ()
+enqueue job order (KQueue qMap sz _ oMap) = do
   let qKey = jobTier job
+  let oKey = orderId order
+
+  modifyTVar' oMap $ \hm ->
+    if HM.member oKey hm
+      then hm
+      else HM.insert oKey order hm
+
   currentMap <- readTVar qMap
   maybe
     (pure ())
@@ -46,7 +59,7 @@ enqueue job (KQueue qMap sz _) = do
     (HM.lookup qKey currentMap)
 
 dequeue :: KQueue -> STM CookJob
-dequeue (KQueue qMap _ finished) = do
+dequeue (KQueue qMap _ finished _) = do
   qm <- readTVar qMap
   tierLevel [minBound .. maxBound :: JobTier] qm
   where
@@ -64,7 +77,7 @@ dequeue (KQueue qMap _ finished) = do
               return job
 
 markComplete :: CookJob -> KQueue -> STM ()
-markComplete job (KQueue _ _ finished) = do
+markComplete job (KQueue _ _ finished _) = do
   modifyTVar' finished $ HS.insert (jobId job)
 
 runnableJob :: CookJob -> TVar (HS.HashSet Int) -> STM Bool
@@ -74,3 +87,8 @@ runnableJob job ids = do
       -- verify all ids in requires list are finished
       finishedLookup x = flip HS.member finished x
   return $ all finishedLookup requiresList
+
+getOrder :: Int -> KQueue -> STM (Maybe Order)
+getOrder oid (KQueue _ _ _ oMap) = do
+  hm <- readTVar oMap
+  return $ HM.lookup oid hm

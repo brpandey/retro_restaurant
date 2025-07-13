@@ -1,15 +1,11 @@
 module Menu
-  ( MenuChoice (..),
-    convertTasks,
+  ( convertTasks,
     menuTasks,
   )
 where
 
 import Data.Time
 import KitchenTypes
-
-data MenuChoice = GardenVariety | ChickenCombo | MahiMahi
-  deriving (Show, Enum, Bounded, Eq)
 
 menuTasks :: MenuChoice -> [Task]
 menuTasks ChickenCombo =
@@ -33,13 +29,14 @@ menuTasks MahiMahi =
     Task 4 "Make Burger" "Assemble Burger patty, buns with lettuce and custom sauce" 2 [1, 2, 3]
   ]
 
-convertTasks :: Int -> UTCTime -> [Task] -> String -> JobTier -> [CookJob]
-convertTasks patronId now taskList choiceStr tier =
+convertTasks :: Int -> Int -> UTCTime -> [Task] -> MenuChoice -> JobTier -> [CookJob]
+convertTasks patronId oid now taskList menuItem tier =
   let convertId i = patronId * 50 + i
-      convert (Task id name desc priority requires) =
+      convert (Task tid name desc priority requires) =
         CookJob
-          (convertId id)
-          (name ++ " for Patron " ++ show patronId)
+          (convertId tid)
+          oid
+          (show menuItem ++ " " ++ name ++ " for Patron " ++ show patronId)
           desc
           priority
           now
