@@ -8,7 +8,8 @@ where
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Monad
-import qualified Data.Map.Strict as HM
+import qualified Data.HashMap.Strict as HM
+import Data.Hashable
 import Data.Time
 import qualified KitchenQueue as KQ
 import KitchenTypes
@@ -28,7 +29,7 @@ data OrderStatus = OrderStatus
     orderState :: OrderState
   }
 
-type StatusMap = TVar (HM.Map Int OrderStatus)
+type StatusMap = TVar (HM.HashMap Int OrderStatus)
 
 newtype CookFail = CookFail Int
 
@@ -48,7 +49,6 @@ openKitchen = do
 
   customerQ <- newTQueueIO
   kitchenQ <- atomically $ KQ.newKQ 10
-  --  kitchenQ <- newTQueueIO
   pendingDeliveryQ <- newTQueueIO
   deliveryQ <- newTQueueIO
 
@@ -136,11 +136,9 @@ cook cid fromQ toQ statusMap cookFail metricsC = cookLoop 1 -- Only allow for 1 
           atomically $ do
             -- writeTQueue fromQ order -- put order back on original queue
             maybeOrder <- KQ.getOrder (jobOrderId job) fromQ
-            case maybeOrder of
-              Just order -> do
-                KQ.enqueue job order fromQ -- put order back on original Kqueue
-                M.publishMetric metricsC M.OrderCookedIncorrectly
-              Nothing -> pure ()
+            whenJustDoSTM maybeOrder $ \order -> do
+              KQ.enqueue job order fromQ -- put order back on original Kqueue
+              M.publishMetric metricsC M.OrderCookedIncorrectly
           cookLoop $ n - 1
         else do
           atomically $ KQ.markComplete job fromQ
@@ -191,12 +189,11 @@ waitress wid fromQ toQ statusMap metricsC = forever $ do
   order1 <- atomically $ readTQueue fromQ
   atomically $ do
     smap <- readTVar statusMap
-    case HM.lookup (orderId order1) smap of
-      Just status -> do
-        -- if expression false retry!
-        check (orderState status == (Cooked :: OrderState))
-        writeTQueue toQ order1
-      Nothing -> return ()
+    let maybeStatus = HM.lookup (orderId order1) smap
+    whenJustDoSTM maybeStatus $ \status -> do
+      -- if check expression false retry!
+      check (orderState status == (Cooked :: OrderState))
+      writeTQueue toQ order1
   -- B) this simulates waitress actually delivering finished orders to customer
   order2 <- atomically $ readTQueue toQ
   threadDelay =<< randomRIO (1_000_000, 2_000_000)
@@ -229,10 +226,19 @@ prepareDrink order statusMap = do
 
 updateStatus :: Int -> StatusMap -> (OrderStatus -> (OrderStatus, Bool)) -> STM Bool
 updateStatus key statusMap f = do
-  currentMap <- readTVar statusMap
-  case HM.lookup key currentMap of
-    Nothing -> return False
-    Just oldStatus -> do
-      let (newStatus, result) = f oldStatus
-      writeTVar statusMap (HM.insert key newStatus currentMap)
+  updateLockedHM key statusMap f False
+
+-- Helper functions
+updateLockedHM :: (Eq k, Hashable k) => k -> TVar (HM.HashMap k v) -> (v -> (v, a)) -> a -> STM a
+updateLockedHM key locked lambda defaultValue = do
+  hm <- readTVar locked
+  case HM.lookup key hm of
+    Nothing -> return defaultValue
+    Just value -> do
+      let (value', result) = lambda value
+      writeTVar locked (HM.insert key value' hm)
       return result
+
+-- Run STM Action if Maybe is Just
+whenJustDoSTM :: Maybe a -> (a -> STM ()) -> STM ()
+whenJustDoSTM m f = maybe (pure ()) f m
