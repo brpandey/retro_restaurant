@@ -14,7 +14,8 @@ import qualified Data.HashSet as HS
 import Data.Heap (MinHeap)
 import qualified Data.Heap as H
 import qualified Data.Map.Strict as HM
-import Data.Time
+-- import Data.Time
+import Debug.Trace (trace) -- Debug only
 import KitchenTypes
 
 -- MLPQ multi-level priority queue to replace old kitchen queue which is TQueue Order
@@ -39,7 +40,7 @@ newKQ sz = do
 enqueue :: CookJob -> Order -> KQueue -> STM ()
 enqueue job order (KQueue qMap sz _ oMap) = do
   let qKey = jobTier job
-  let oKey = orderId order
+      oKey = orderId order
 
   modifyTVar' oMap $ \hm ->
     if HM.member oKey hm
@@ -64,17 +65,31 @@ dequeue (KQueue qMap _ finished _) = do
   tierLevel [minBound .. maxBound :: JobTier] qm
   where
     tierLevel [] _ = retry
-    tierLevel (head : tail) qm = do
-      case HM.lookup head qm of
-        Nothing -> tierLevel tail qm
+    tierLevel (h : t) qm = do
+      case HM.lookup h qm of
+        Nothing -> tierLevel t qm
         Just pq -> do
           filteredPQ <- filterM (\j -> runnableJob j finished) (H.toList pq)
           case filteredPQ of
-            [] -> tierLevel tail qm
+            [] -> tierLevel t qm
             (job : _) -> do
               let pq' = H.filter (/= job) pq
-              writeTVar qMap $ HM.insert head pq' qm
-              return job
+              writeTVar qMap $ HM.insert h pq' qm
+              trace -- Debug output
+                ( "   -> Dequeued job from tier priority q: "
+                    ++ show h
+                    ++ ", Id: "
+                    ++ show (jobId job)
+                    ++ ", Order "
+                    ++ show (jobOrderId job)
+                    ++ ", Prio: "
+                    ++ show (jobPriority job)
+                    ++ ", Name: "
+                    ++ show (jobName job)
+                    ++ ", Reqs: "
+                    ++ show (jobRequires job)
+                )
+                (return job) -- return job
 
 markComplete :: CookJob -> KQueue -> STM ()
 markComplete job (KQueue _ _ finished _) = do

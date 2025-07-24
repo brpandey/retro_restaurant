@@ -13,23 +13,27 @@ import Control.Monad (forever)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef
 import Data.List (intercalate)
-import Data.Time
+
+-- import Data.Time
 
 data Metrics = Metrics
   { placedOrders :: IORef Int,
-    cookMistakeOrders :: IORef Int,
-    cookSuccessOrders :: IORef (HM.HashMap Int Int),
+    cookMistakeJobs :: IORef Int,
+    cookSuccessJobs :: IORef (HM.HashMap Int Int),
+    cookSuccessJobsCount :: IORef Int,
+    cookedOrders :: IORef Int,
     deliveredOrders :: IORef Int
   }
 
 data OrderEvent
   = OrderPlaced
-  | OrderCookedIncorrectly
-  | OrderCooked Int
+  | CookJobFailed
+  | CookJobSuccess Int
+  | OrderCooked
   | OrderDelivered
 
 createMetrics :: IO Metrics
-createMetrics = Metrics <$> newIORef 0 <*> newIORef 0 <*> newIORef HM.empty <*> newIORef 0
+createMetrics = Metrics <$> newIORef 0 <*> newIORef 0 <*> newIORef HM.empty <*> newIORef 0 <*> newIORef 0 <*> newIORef 0
 
 publishMetric :: TChan OrderEvent -> OrderEvent -> STM ()
 publishMetric = writeTChan
@@ -41,11 +45,14 @@ metricsHandler m chan = forever $ do
   case event of
     OrderPlaced -> do
       modifyIORef' (placedOrders m) (+ 1)
-    OrderCookedIncorrectly -> do
-      modifyIORef' (cookMistakeOrders m) (+ 1)
-    OrderCooked cid -> do
+    CookJobFailed -> do
+      modifyIORef' (cookMistakeJobs m) (+ 1)
+    CookJobSuccess cid -> do
       -- Note: 1 is default value if v is Nothing, cid is key
-      modifyIORef' (cookSuccessOrders m) (HM.alter (\v -> Just $ maybe 1 (+ 1) v) cid)
+      modifyIORef' (cookSuccessJobs m) (HM.alter (\v -> Just $ maybe 1 (+ 1) v) cid)
+      modifyIORef' (cookSuccessJobsCount m) (+ 1)
+    OrderCooked -> do
+      modifyIORef' (cookedOrders m) (+ 1)
     OrderDelivered -> do
       modifyIORef' (deliveredOrders m) (+ 1)
 
@@ -57,25 +64,30 @@ showMap hm =
 
 summaryMetrics :: Metrics -> IO ()
 summaryMetrics m = do
-  now <- getZonedTime
+  -- now <- getZonedTime
   po <- readIORef (placedOrders m)
-  mistake <- readIORef (cookMistakeOrders m)
-  cookedMap <- readIORef (cookSuccessOrders m)
+  mistake <- readIORef (cookMistakeJobs m)
+  cookedMap <- readIORef (cookSuccessJobs m)
+  successJobs <- readIORef (cookSuccessJobsCount m)
+  cooked <- readIORef (cookedOrders m)
   delivered <- readIORef (deliveredOrders m)
   putStrLn $
-    "["
-      ++ show now
-      ++ "]"
-      ++ " <Metric Summary> "
+    "\n<Metric Summary> "
       ++ "\n"
       ++ " Orders placed: "
       ++ show po
       ++ "\n"
-      ++ " Cook Order Failures: "
+      ++ " Cook Job Failures: "
       ++ show mistake
       ++ "\n"
-      ++ " Orders Cooked by Cook: "
+      ++ " Cook Job Successes: "
+      ++ show successJobs
+      ++ "\n"
+      ++ " Jobs Cooked by Cook: "
       ++ showMap cookedMap
+      ++ "\n"
+      ++ " Cooked Orders: "
+      ++ show cooked
       ++ "\n"
       ++ " Delivered Orders: "
       ++ show delivered

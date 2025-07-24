@@ -44,7 +44,6 @@ nextState os = os -- No change if conditions not met
 
 openKitchen :: IO ([Int] -> IO (), M.Metrics)
 openKitchen = do
-  -- Spin up all the actors: orderTakers, cooks, customers, waitresses
   putStrLn "Kitchen starting with 2 order takers, 3 cooks, and 3 waitresses"
 
   customerQ <- newTQueueIO
@@ -59,10 +58,9 @@ openKitchen = do
 
   void $ forkIO $ M.metricsHandler metrics metricsC
 
+  -- Spin up all the actors: orderTakers, cooks, customers, waitresses
   replicateM_ 2 $ forkIO $ orderTaker customerQ kitchenQ statusMap metricsC
-
   spawnCooks [1 .. 3] kitchenQ pendingDeliveryQ statusMap metricsC
-
   forM_ [1 .. 3] $ \wid -> forkIO $ waitress wid pendingDeliveryQ deliveryQ statusMap metricsC
 
   let launchPatrons ids = forM_ ids $ \pid -> forkIO $ patron pid customerQ
@@ -74,9 +72,9 @@ generateOrder oid queue = do
   now <- getCurrentTime
 
   menuItem <- randomEnum :: IO MenuChoice
-  priority <- randomEnum :: IO JobTier
+  pri <- randomEnum :: IO JobTier
 
-  let order = Order now oid oid menuItem priority
+  let order = Order now oid oid menuItem pri
   atomically $ writeTQueue queue order
 
   return $ "Placed new order " ++ show oid ++ " (menu item " ++ show menuItem ++ ")"
@@ -116,39 +114,40 @@ cookSupervisor fromQ toQ statusMap cookFail metricsC = forever $ do
   CookFail cid <- atomically $ readTChan cookFail
   threadDelay =<< randomRIO (100_000, 200_000)
   void $ forkIO $ cook cid fromQ toQ statusMap cookFail metricsC
-  putStrLn $ " Cook " ++ show cid ++ ", restarted and given the chance to cook again"
+  putStrLn $ "+ Cook " ++ show cid ++ ", restarted and given the chance to cook again"
 
 cook :: Int -> KQ.KQueue -> TQueue Order -> StatusMap -> TChan CookFail -> TChan M.OrderEvent -> IO ()
-cook cid fromQ toQ statusMap cookFail metricsC = cookLoop 1 -- Only allow for 1 mistake!
+cook cid fromQ toQ statusMap cookFail metricsC = cookLoop 2 -- Only allow for 2 mistakes!
   where
     cookLoop :: Int -> IO ()
     cookLoop 0 = do
-      putStrLn $ " Cook " ++ show cid ++ " made too many mistakes"
+      putStrLn $ " ! Cook " ++ show cid ++ ", made too many mistakes ~ taking an unpaid break"
       atomically $ writeTChan cookFail (CookFail cid)
     cookLoop n = do
       job <- atomically $ KQ.dequeue fromQ
-      putStrLn $ " Cook " ++ show cid ++ ", preparing job for order " ++ show (jobId job)
+      putStrLn $ " Cook " ++ show cid ++ ", preparing job " ++ show (jobId job)
       threadDelay =<< randomRIO (500_000, 800_000)
       mistake <- randomRIO (1, 99 :: Int)
-      if mistake <= 10
+      if mistake <= 20
         then do
-          putStrLn $ "  Cook " ++ show cid ++ ", made a mistake on job" ++ show (jobId job)
+          putStrLn $ " ! Cook " ++ show cid ++ ", made a mistake on job" ++ show (jobId job)
           atomically $ do
-            -- writeTQueue fromQ order -- put order back on original queue
             maybeOrder <- KQ.getOrder (jobOrderId job) fromQ
             whenJustDoSTM maybeOrder $ \order -> do
               KQ.enqueue job order fromQ -- put order back on original Kqueue
-              M.publishMetric metricsC M.OrderCookedIncorrectly
+              M.publishMetric metricsC M.CookJobFailed
           cookLoop $ n - 1
         else do
-          atomically $ KQ.markComplete job fromQ
+          atomically $ do
+            KQ.markComplete job fromQ
+            M.publishMetric metricsC (M.CookJobSuccess cid)
           cookUpdate n job fromQ toQ statusMap
     cookUpdate :: Int -> CookJob -> KQ.KQueue -> TQueue Order -> StatusMap -> IO ()
-    cookUpdate n job kq toQ statusMap = do
+    cookUpdate n job kq destQ sMap = do
       foodReady <- atomically $ do
         updateStatus
           (jobOrderId job)
-          statusMap
+          sMap
           ( \os ->
               let prepared = foodPrepared os
                   finished = finishedFoodTasks os + 1
@@ -169,11 +168,11 @@ cook cid fromQ toQ statusMap cookFail metricsC = cookLoop 1 -- Only allow for 1 
           Nothing -> putStrLn " Weird lost the order! Can't finish it"
           Just order -> do
             atomically $ do
-              writeTQueue toQ order
-              M.publishMetric metricsC (M.OrderCooked cid)
+              writeTQueue destQ order
+              M.publishMetric metricsC M.OrderCooked
 
             putStrLn $
-              "  Food cooked for order "
+              "✓ Food cooked for order "
                 ++ show (orderId order)
                 ++ " and ready to eat (thanks Cook "
                 ++ show cid
@@ -207,7 +206,18 @@ waitress wid fromQ toQ statusMap metricsC = forever $ do
              in (nextState o', True)
         )
     M.publishMetric metricsC M.OrderDelivered
-  putStrLn $ " Waitress " ++ show wid ++ ", delivered order " ++ show (orderId order2) ++ " to customer "
+  putStrLn $
+    " \n ~~ Waitress "
+      ++ show wid
+      ++ ", delivered order "
+      ++ show (orderId order2)
+      ++ ", priority "
+      ++ show (priority order2)
+      ++ " for "
+      ++ show (menuChoice order2)
+      ++ " to hungry Patron "
+      ++ show (patronId order2)
+      ++ " \n"
 
 prepareDrink :: Order -> StatusMap -> IO ()
 prepareDrink order statusMap = do
@@ -222,7 +232,7 @@ prepareDrink order statusMap = do
             let o' = o {beveragePrepared = True}
              in (nextState o', True)
         )
-  putStrLn $ " Drink prepared for order " ++ show (orderId order)
+  putStrLn $ "✓ Drink prepared for order " ++ show (orderId order)
 
 updateStatus :: Int -> StatusMap -> (OrderStatus -> (OrderStatus, Bool)) -> STM Bool
 updateStatus key statusMap f = do
