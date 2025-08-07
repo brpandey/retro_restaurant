@@ -141,46 +141,46 @@ cook cid fromQ toQ statusMap cookFail metricsC = cookLoop 2 -- Only allow for 2 
           atomically $ do
             KQ.markComplete job fromQ
             M.publishMetric metricsC (M.CookJobSuccess cid)
-          cookUpdate n job fromQ toQ statusMap
-    cookUpdate :: Int -> CookJob -> KQ.KQueue -> TQueue Order -> StatusMap -> IO ()
-    cookUpdate n job kq destQ sMap = do
-      foodReady <- atomically $ do
-        updateStatus
-          (jobOrderId job)
-          sMap
-          ( \os ->
-              let prepared = foodPrepared os
-                  finished = finishedFoodTasks os + 1
-                  total = totalFoodTasks os
-                  prepared' = finished == total
-                  changed = (prepared /= prepared') -- capture if it has toggled
-                  os' =
-                    os
-                      { finishedFoodTasks = finished,
-                        foodPrepared = prepared'
-                      }
-               in (nextState os', changed)
-          )
-      -- Since food is cooked, put on pending delivery queue, for waitress to poll (to ensure drink is also done)
-      when foodReady $ do
-        maybeOrder <- atomically $ KQ.getOrder (jobOrderId job) kq
-        case maybeOrder of
-          Nothing -> putStrLn " Weird lost the order! Can't finish it"
-          Just order -> do
-            atomically $ do
-              writeTQueue destQ order
-              M.publishMetric metricsC M.OrderCooked
+          cookUpdate cid job fromQ toQ statusMap metricsC
+          cookLoop n
 
-            putStrLn $
-              "✓ Food cooked for order "
-                ++ show (orderId order)
-                ++ " and ready to eat (thanks Cook "
-                ++ show cid
-                ++ ") assistant preparing drinks "
+cookUpdate :: Int -> CookJob -> KQ.KQueue -> TQueue Order -> StatusMap -> TChan M.OrderEvent -> IO ()
+cookUpdate cid job kq destQ sMap metC = do
+  foodReady <- atomically $ do
+    updateStatus
+      (jobOrderId job)
+      sMap
+      ( \os ->
+          let prepared = foodPrepared os
+              finished = finishedFoodTasks os + 1
+              total = totalFoodTasks os
+              prepared' = finished == total
+              changed = (prepared /= prepared') -- capture if it has toggled
+              os' =
+                os
+                  { finishedFoodTasks = finished,
+                    foodPrepared = prepared'
+                  }
+           in (nextState os', changed)
+      )
+  -- Since food is cooked, put on pending delivery queue, for waitress to poll (to ensure drink is also done)
+  when foodReady $ do
+    maybeOrder <- atomically $ KQ.getOrder (jobOrderId job) kq
+    case maybeOrder of
+      Nothing -> putStrLn " Weird lost the order! Can't finish it"
+      Just order -> do
+        atomically $ do
+          writeTQueue destQ order
+          M.publishMetric metC M.OrderCooked
 
-            void $ forkIO $ prepareDrink order statusMap
+        putStrLn $
+          "✓ Food cooked for order "
+            ++ show (orderId order)
+            ++ " and ready to eat (thanks Cook "
+            ++ show cid
+            ++ ") assistant preparing drinks "
 
-      cookLoop n
+        void $ forkIO $ prepareDrink order sMap
 
 waitress :: Int -> TQueue Order -> TQueue Order -> StatusMap -> TChan M.OrderEvent -> IO ()
 waitress wid fromQ toQ statusMap metricsC = forever $ do
